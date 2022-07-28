@@ -1,13 +1,17 @@
 #include <Stepper.h>
 #include <Servo.h>
+#include <EEPROM.h>
 
 #define SERVO_PIN 3
 #define ECHO_PIN 4
 #define TRIG_PIN 5
+#define STATUS_PIN 13
 
 #define COMBO_1 22
 #define COMBO_2 24
 #define COMBO_3 34
+
+#define DISTANCE_ADDR 0x0
 
 const int stepsPerRevolution = 200;
 const int comboSteps = 40;
@@ -27,9 +31,12 @@ void setup() {
 
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
+  pinMode(STATUS_PIN, OUTPUT);
 
   Serial.begin(9600);
   Serial.println("Welcome. Speed is set at 120 rpm");
+
+  digitalWrite(STATUS_PIN, LOW);
 }
 
 void loop() {
@@ -61,10 +68,33 @@ void loop() {
     } else if(command == "SPEED") {
       Serial.print("Setting speed to " + String(data) + " rpm.");
       myStepper.setSpeed(data);
-    } else if(command == "SENSE") {
+    } else if(command == "WRITE") {
+      Serial.print("Writing distance threshold as " + String(data) + " cm.");
+      writeDistanceEEPROM(data);
+    } else if(command == "DIST") {
+      Serial.println("Reading distance.");
       while(!Serial.available()) {
-        getDistance();
+        int distance = getDistance();
+        Serial.println(String(distance) + " cm.");
       }
+    } else if(command == "SENSE") {
+      digitalWrite(STATUS_PIN, HIGH);
+      const int distanceThreshold = readDistanceEEPROM();
+
+      Serial.print("Waiting for distance. Distance threshold: " + String(distanceThreshold) + " cm.");
+      
+      while(!Serial.available()) {
+        int distance = getDistance();
+        if(distance <= distanceThreshold) {
+          Serial.print("\nDialing combination and running servo!");
+//          delay(120000);
+          dialFullCombination();
+          runServo();
+          break;
+        }
+      }
+      
+      digitalWrite(STATUS_PIN, LOW);
     } else {
       Serial.print("Invalid command.");
     }
@@ -73,22 +103,28 @@ void loop() {
   }
 }
 
-void getDistance() {
+int readDistanceEEPROM() {
+  return EEPROM.read(DISTANCE_ADDR);
+}
+
+void writeDistanceEEPROM(int distance) {
+  EEPROM.write(DISTANCE_ADDR, distance);
+}
+
+int getDistance() {
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
   digitalWrite(TRIG_PIN, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
 
-  long duration = pulseIn(ECHO_PIN, HIGH);
+  long duration = pulseIn(ECHO_PIN, HIGH, 10000);
   int distance = duration * 0.034 / 2;
-  Serial.print("Distance: ");
-  Serial.print(distance);
-  Serial.println(" cm");
+  return distance;
 }
 
 void runServo() {
-  servo.write(90);
+  servo.write(110);
   delay(1000);
   servo.write(50);
 }
@@ -111,7 +147,7 @@ void dialComboRelative(int finalPos, int startPos, bool ccw) {
   int deltaCombo = ((finalPos - startPos) + comboSteps) % comboSteps;
   if (!ccw) deltaCombo = comboSteps - deltaCombo;
   float revs = deltaCombo  / (float) comboSteps;
-  stepRevs((revs + 0.015) * (ccw ? -1 : 1)); // add small tolerance value
+  stepRevs((revs + 0) * (ccw ? -1 : 1)); // add small tolerance value
 }
 
 void stepRevs(float revs) {
